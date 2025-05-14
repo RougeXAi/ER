@@ -5,6 +5,7 @@ torch==2.7.0+cu128
 torchvision
 torchaudio
 xformers
+bitsandbytes
 # bitsandbytes==0.44.0 # Changed to just bitsandbytes to allow upgrade
 tensorboard==2.15.2
 tensorflow==2.15.0.post1
