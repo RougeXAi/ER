@@ -1,0 +1,10 @@
+# Custom index URL for specific packages
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+torch==2.7.0+cu128
+torchvision
+torchaudio
+xformers
+triton-windows==3.3.0.post19
+
+-r requirements_windows.txt

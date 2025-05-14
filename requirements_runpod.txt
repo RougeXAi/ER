@@ -1,0 +1,14 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.7.0+cu128
+torchvision
+torchaudio
+xformers
+
+bitsandbytes
+tensorboard==2.14.1
+tensorflow==2.14.0
+wheel
+tensorrt
+onnxruntime-gpu==1.19.2
+
+-r requirements.txt
