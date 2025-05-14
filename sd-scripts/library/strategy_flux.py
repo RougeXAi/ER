@@ -29,14 +29,24 @@ class FluxTokenizeStrategy(TokenizeStrategy):
     def tokenize(self, text: Union[str, List[str]]) -> List[torch.Tensor]:
         text = [text] if isinstance(text, str) else text
 
-        l_tokens = self.clip_l(text, max_length=77, padding="max_length", truncation=True, return_tensors="pt")
-        t5_tokens = self.t5xxl(text, max_length=self.t5xxl_max_length, padding="max_length", truncation=True, return_tensors="pt")
+        l_tokens_output = self.clip_l(text, max_length=77, padding="max_length", truncation=True, return_tensors="pt")
+        t5_tokens_output = self.t5xxl(text, max_length=self.t5xxl_max_length, padding="max_length", truncation=True, return_tensors="pt")
 
-        t5_attn_mask = t5_tokens["attention_mask"]
-        l_tokens = l_tokens["input_ids"]
-        t5_tokens = t5_tokens["input_ids"]
+        # Chroma-style MMDiT Masking: Unmask the first padding token
+        modified_t5_attn_mask = t5_tokens_output["attention_mask"].clone()
+        for i in range(modified_t5_attn_mask.shape[0]):  # Iterate over batch
+            # The sum of the original attention mask gives the number of actual (non-padding) tokens
+            actual_sequence_len = t5_tokens_output["attention_mask"][i].sum().item()
+            
+            # If there is padding (actual_sequence_len < max_length) and the sequence is not empty
+            if 0 < actual_sequence_len < self.t5xxl_max_length:
+                # Unmask the first padding token by setting its attention mask value to 1
+                modified_t5_attn_mask[i, actual_sequence_len] = 1
+        
+        l_tokens_input_ids = l_tokens_output["input_ids"]
+        t5_tokens_input_ids = t5_tokens_output["input_ids"]
 
-        return [l_tokens, t5_tokens, t5_attn_mask]
+        return [l_tokens_input_ids, t5_tokens_input_ids, modified_t5_attn_mask]
 
 
 class FluxTextEncodingStrategy(TextEncodingStrategy):

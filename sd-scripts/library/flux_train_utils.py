@@ -497,6 +497,41 @@ def get_noisy_model_input_and_timesteps(
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))  # we are pre-packed so must adjust for packed size
         sigmas = time_shift(mu, 1.0, sigmas)
         timesteps = sigmas * num_timesteps
+    elif args.timestep_sampling == "chroma_quadratic_tails":
+        k = args.chroma_timestep_k
+        
+        sampled_values = torch.empty(bsz, device=device, dtype=dtype)
+        num_generated = 0
+        # Max value of 1 + k(2x-1)^2 is 1+k. Acceptance rate is (1+k/3)/(1+k).
+        # To be safe, generate slightly more candidates than 1/acceptance_rate.
+        # Example: k=0.6, rate = 1.2/1.6 = 0.75. 1/0.75 = 1.33. Factor 1.5 should be safe.
+        oversampling_factor = 1.5 
+
+        while num_generated < bsz:
+            num_candidates_needed = bsz - num_generated
+            num_to_generate_this_round = math.ceil(num_candidates_needed * oversampling_factor)
+            
+            u_candidates = torch.rand(num_to_generate_this_round, device=device, dtype=dtype)
+            
+            # PDF proportional to f(u) = 1 + k(2u-1)^2
+            # Max value of f(u) is M = 1+k.
+            # We accept if random_val_0_to_1 < f(u_candidates) / M
+            prob_density_unnormalized = 1 + k * (2 * u_candidates - 1)**2
+            scaled_density_for_acceptance = prob_density_unnormalized / (1 + k)
+            
+            acceptance_rand_vars = torch.rand(num_to_generate_this_round, device=device, dtype=dtype)
+            accepted_mask = acceptance_rand_vars < scaled_density_for_acceptance
+            
+            accepted_u = u_candidates[accepted_mask]
+            
+            num_accepted_this_batch = accepted_u.size(0)
+            if num_accepted_this_batch > 0:
+                actual_num_to_take = min(num_accepted_this_batch, num_candidates_needed)
+                sampled_values[num_generated : num_generated + actual_num_to_take] = accepted_u[:actual_num_to_take]
+                num_generated += actual_num_to_take
+        
+        sigmas = sampled_values
+        timesteps = sigmas * num_timesteps
     else:
         # Sample a random timestep for each image
         # for weighting schemes where we sample timesteps non-uniformly
@@ -654,10 +689,10 @@ def add_flux_train_arguments(parser: argparse.ArgumentParser):
 
     parser.add_argument(
         "--timestep_sampling",
-        choices=["sigma", "uniform", "sigmoid", "shift", "flux_shift"],
+        choices=["sigma", "uniform", "sigmoid", "shift", "flux_shift", "chroma_quadratic_tails"],
         default="sigma",
-        help="Method to sample timesteps: sigma-based, uniform random, sigmoid of random normal, shift of sigmoid and FLUX.1 shifting."
-        " / タイムステップをサンプリングする方法：sigma、random uniform、random normalのsigmoid、sigmoidのシフト、FLUX.1のシフト。",
+        help="Method to sample timesteps: sigma-based, uniform random, sigmoid of random normal, shift of sigmoid, FLUX.1 shifting, or Chroma's quadratic tails."
+        " / タイムステップをサンプリングする方法：sigma、random uniform、random normalのsigmoid、sigmoidのシフト、FLUX.1のシフト、Chromaの二次テール。",
     )
     parser.add_argument(
         "--sigmoid_scale",
@@ -679,4 +714,10 @@ def add_flux_train_arguments(parser: argparse.ArgumentParser):
         type=float,
         default=3.0,
         help="Discrete flow shift for the Euler Discrete Scheduler, default is 3.0. / Euler Discrete Schedulerの離散フローシフト、デフォルトは3.0。",
+    )
+    parser.add_argument(
+        "--chroma_timestep_k",
+        type=float,
+        default=0.6,
+        help="K parameter for Chroma's quadratic tails timestep sampling. Controls the 'U-ness' of the distribution. Default is 0.6."
     )
