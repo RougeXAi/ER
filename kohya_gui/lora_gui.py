@@ -1681,9 +1681,17 @@ def train_model(
         "ae": ae if flux1_checkbox else None,
         # "clip_l": see previous assignment above for code
         "t5xxl": t5xxl_value,
-        "discrete_flow_shift": float(discrete_flow_shift) if flux1_checkbox else None,
+        # New timestep sampling parameters
         "model_prediction_type": model_prediction_type if flux1_checkbox else None,
         "timestep_sampling": timestep_sampling if flux1_checkbox else None,
+        "min_noising_strength": float(min_noising_strength) if flux1_checkbox else None,
+        "max_noising_strength": float(max_noising_strength) if flux1_checkbox else None,
+        "noising_weight": float(noising_weight) if flux1_checkbox else None,
+        "noising_bias": float(noising_bias) if flux1_checkbox else None,
+        "timestep_shift": float(timestep_shift) if flux1_checkbox else None,
+        "sigmoid_scale": float(sigmoid_scale) if flux1_checkbox else None,
+        "dynamic_timestep_shifting": dynamic_timestep_shifting if flux1_checkbox else None,
+        # Other flux parameters
         "split_mode": split_mode if flux1_checkbox else None,
         "t5xxl_max_token_length": (
             int(t5xxl_max_token_length) if flux1_checkbox else None
