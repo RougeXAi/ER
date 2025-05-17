@@ -90,92 +90,34 @@ class flux1Training:
                     )
 
                 with gr.Row():
-                    self.timestep_sampling = gr.Dropdown(
-                        label="Timestep Sampling",
-                        choices=["flux_shift", "sigma", "shift", "sigmoid", "uniform", "logit_normal"],
-                        value=self.config.get("flux1.timestep_sampling", "sigma"),
-                        info="Method to sample timesteps: sigma-based, uniform random, sigmoid of random normal, shift of sigmoid, FLUX.1 shifting, or logit normal distribution",
+
+                    self.discrete_flow_shift = gr.Number(
+                        label="Discrete Flow Shift",
+                        value=self.config.get("flux1.discrete_flow_shift", 3.0),
+                        info="Discrete flow shift for the Euler Discrete Scheduler, default is 3.0",
+                        minimum=-1024,
+                        maximum=1024,
+                        step=0.01,
                         interactive=True,
                     )
                     self.model_prediction_type = gr.Dropdown(
                         label="Model Prediction Type",
                         choices=["raw", "additive", "sigma_scaled"],
                         value=self.config.get(
-                            "flux1.model_prediction_type", "sigma_scaled"
+                            "flux1.timestep_sampling", "sigma_scaled"
                         ),
-                        info="How to interpret and process the model prediction",
+                        interactive=True,
+                    )
+                    self.timestep_sampling = gr.Dropdown(
+                        label="Timestep Sampling",
+                        choices=["flux_shift", "sigma", "shift", "sigmoid", "uniform"],
+                        value=self.config.get("flux1.timestep_sampling", "sigma"),
                         interactive=True,
                     )
                     self.apply_t5_attn_mask = gr.Checkbox(
                         label="Apply T5 Attention Mask",
                         value=self.config.get("flux1.apply_t5_attn_mask", False),
-                        info="Apply attention mask to T5-XXL encode and FLUX double blocks",
-                        interactive=True,
-                    )
-                
-                with gr.Row():
-                    self.min_noising_strength = gr.Slider(
-                        label="Min Noising Strength",
-                        value=self.config.get("flux1.min_noising_strength", 0.0),
-                        info="Minimum noising strength as a percentage (0.0 to 1.0) of total timesteps",
-                        minimum=0.0,
-                        maximum=1.0,
-                        step=0.01,
-                        interactive=True,
-                    )
-                    self.max_noising_strength = gr.Slider(
-                        label="Max Noising Strength",
-                        value=self.config.get("flux1.max_noising_strength", 1.0),
-                        info="Maximum noising strength as a percentage (0.0 to 1.0) of total timesteps",
-                        minimum=0.0,
-                        maximum=1.0,
-                        step=0.01,
-                        interactive=True,
-                    )
-                
-                with gr.Row():
-                    self.noising_weight = gr.Number(
-                        label="Noising Weight",
-                        value=self.config.get("flux1.noising_weight", 0.65),
-                        info="Weight parameter for logit normal distribution (similar to scale). Higher values make distribution more uniform",
-                        minimum=0.0,
-                        maximum=10.0,
-                        step=0.01,
-                        interactive=True,
-                    )
-                    self.noising_bias = gr.Number(
-                        label="Noising Bias",
-                        value=self.config.get("flux1.noising_bias", 0.5),
-                        info="Bias parameter for logit normal distribution. Controls the center of the distribution",
-                        minimum=-5.0,
-                        maximum=5.0,
-                        step=0.01,
-                        interactive=True,
-                    )
-                    self.timestep_shift = gr.Number(
-                        label="Timestep Shift",
-                        value=self.config.get("flux1.timestep_shift", 1.0),
-                        info="Shift parameter for timestep distribution. Values > 1 emphasize earlier timesteps, values < 1 emphasize later timesteps",
-                        minimum=0.01,
-                        maximum=10.0,
-                        step=0.01,
-                        interactive=True,
-                    )
-                    self.sigmoid_scale = gr.Number(
-                        label="Sigmoid Scale",
-                        value=self.config.get("flux1.sigmoid_scale", 1.0),
-                        info="Scale factor for sigmoid timestep sampling (only used when timestep-sampling is 'sigmoid')",
-                        minimum=0.1,
-                        maximum=10.0,
-                        step=0.1,
-                        interactive=True,
-                    )
-                
-                with gr.Row():
-                    self.dynamic_timestep_shifting = gr.Checkbox(
-                        label="Dynamic Timestep Shifting",
-                        value=self.config.get("flux1.dynamic_timestep_shifting", False),
-                        info="Enable dynamic timestep shifting based on image size. Overrides timestep_shift parameter",
+                        info="Apply attention mask to T5-XXL encode and FLUX double blocks ",
                         interactive=True,
                     )
                 with gr.Row(visible=True if not finetuning else False):

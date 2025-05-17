@@ -497,19 +497,32 @@ def get_noisy_model_input_and_timesteps(
     shift = args.timestep_shift
     if args.dynamic_timestep_shifting:
         # Dynamic timestep shifting based on image size (similar to OneTrainer implementation)
-        base_seq_len = 512
+        base_seq_len = 256
         max_seq_len = 4096
-        base_shift = 0.3  # Changed from 0.5 to 0.1 for more flexibility
+        base_shift = 0.25  # Changed from 0.5 to 0.25 as requested
         max_shift = 1.15
         patch_size = 2
         
-        image_seq_len = (latents.shape[2] * 8 // patch_size) * (latents.shape[3] * 8 // patch_size)
-        m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
-        b = base_shift - m * base_seq_len
-        mu = image_seq_len * m + b
+        # Calculate sequence length based on latent size (which is 1/8 of image size)
+        # For 512x512 images, latent is 64x64, and sequence length should be 1024
+        # The sequence length is (width/patch_size) * (height/patch_size)
+        # In OneTrainer, they use the latent dimensions directly
+        image_seq_len = (latents.shape[2] // patch_size) * (latents.shape[3] // patch_size)
         
-        shift = math.exp(mu)
-        logger.info(f"Dynamic timestep shift: {shift:.4f} for image size {latents.shape[2]*8}x{latents.shape[3]*8}")
+        # Linear interpolation between base_shift and max_shift based on sequence length
+        if image_seq_len <= base_seq_len:
+            shift = base_shift
+        elif image_seq_len >= max_seq_len:
+            shift = max_shift
+        else:
+            # Linear interpolation
+            ratio = (image_seq_len - base_seq_len) / (max_seq_len - base_seq_len)
+            shift = base_shift + ratio * (max_shift - base_shift)
+        
+        # Ensure shift is within bounds
+        shift = max(0.25, min(shift, 1.15))
+        
+        logger.info(f"Dynamic timestep shift: {shift:.4f} for image size {latents.shape[2]*8}x{latents.shape[3]*8} (seq_len: {image_seq_len})")
     
     # Log the noising strength parameters (only once per 100 calls to avoid log spam)
     if not hasattr(get_noisy_model_input_and_timesteps, "log_counter"):
@@ -533,14 +546,14 @@ def get_noisy_model_input_and_timesteps(
         # Generate normal distribution with bias and scale
         normal = torch.normal(bias, scale, size=(bsz,), generator=None, device=device)
         # Apply sigmoid to get logit normal distribution
-        logit_normal = torch.sigmoid(normal)
+        sigmas = torch.sigmoid(normal)
         
         # Apply timestep shift if needed
         if shift != 1.0:
-            logit_normal = apply_timestep_shift(logit_normal, shift)
+            sigmas = apply_timestep_shift(sigmas, shift)
         
         # Apply min/max noising strength
-        timesteps = min_timestep + (logit_normal * timestep_range)
+        timesteps = min_timestep + (sigmas * timestep_range)
     elif args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid":
         # Simple random sigma-based noise sampling
         if args.timestep_sampling == "sigmoid":
