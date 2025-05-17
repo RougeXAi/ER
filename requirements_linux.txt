@@ -7,7 +7,7 @@ torchaudio
 bitsandbytes
 xformers
 # bitsandbytes==0.44.0 # Changed to just bitsandbytes to allow upgrade
-tensorboard==2.15.2
+tensorboard==2.19.0
 tensorflow==2.19.0
 onnxruntime-gpu==1.19.2
 
