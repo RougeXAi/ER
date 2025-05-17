@@ -468,13 +468,93 @@ def compute_loss_weighting_for_sd3(weighting_scheme: str, sigmas=None):
     return weighting
 
 
+def apply_timestep_shift(sigmas: torch.Tensor, shift: float) -> torch.Tensor:
+    """Apply timestep shifting to the sigma values.
+    
+    Args:
+        sigmas: Sigma values to shift, ranging from 0 to 1
+        shift: Shift parameter. Values > 1 emphasize earlier timesteps, values < 1 emphasize later timesteps
+        
+    Returns:
+        Shifted sigma values
+    """
+    return (sigmas * shift) / ((shift - 1) * sigmas + 1)
+
+
 def get_noisy_model_input_and_timesteps(
     args, noise_scheduler, latents: torch.Tensor, noise: torch.Tensor, device, dtype
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bsz, _, h, w = latents.shape
     assert bsz > 0, "Batch size not large enough"
     num_timesteps = noise_scheduler.config.num_train_timesteps
-    if args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid":
+    
+    # Apply min and max noising strength to limit the timestep range
+    min_timestep = int(num_timesteps * args.min_noising_strength)
+    max_timestep = int(num_timesteps * args.max_noising_strength)
+    timestep_range = max_timestep - min_timestep
+    
+    # Calculate shift parameter
+    shift = args.timestep_shift
+    if args.dynamic_timestep_shifting:
+        # Dynamic timestep shifting based on image size (similar to OneTrainer implementation)
+        base_seq_len = 256
+        max_seq_len = 4096
+        base_shift = 0.25  # Changed from 0.5 to 0.25 as requested
+        max_shift = 1.15
+        patch_size = 2
+        
+        # Calculate sequence length based on latent size (which is 1/8 of image size)
+        # For 512x512 images, latent is 64x64, and sequence length should be 1024
+        # The sequence length is (width/patch_size) * (height/patch_size)
+        # In OneTrainer, they use the latent dimensions directly
+        image_seq_len = (latents.shape[2] // patch_size) * (latents.shape[3] // patch_size)
+        
+        # Linear interpolation between base_shift and max_shift based on sequence length
+        if image_seq_len <= base_seq_len:
+            shift = base_shift
+        elif image_seq_len >= max_seq_len:
+            shift = max_shift
+        else:
+            # Linear interpolation
+            ratio = (image_seq_len - base_seq_len) / (max_seq_len - base_seq_len)
+            shift = base_shift + ratio * (max_shift - base_shift)
+        
+        # Ensure shift is within bounds
+        shift = max(0.25, min(shift, 1.15))
+        
+        logger.info(f"Dynamic timestep shift: {shift:.4f} for image size {latents.shape[2]*8}x{latents.shape[3]*8} (seq_len: {image_seq_len})")
+    
+    # Log the noising strength parameters (only once per 100 calls to avoid log spam)
+    if not hasattr(get_noisy_model_input_and_timesteps, "log_counter"):
+        get_noisy_model_input_and_timesteps.log_counter = 0
+    
+    get_noisy_model_input_and_timesteps.log_counter += 1
+    if get_noisy_model_input_and_timesteps.log_counter % 100 == 1:
+        logger.info(
+            f"Noising strength: min={args.min_noising_strength:.4f} ({min_timestep}), "
+            f"max={args.max_noising_strength:.4f} ({max_timestep}), "
+            f"range={timestep_range} timesteps, "
+            f"sampling method={args.timestep_sampling}, "
+            f"shift={shift:.4f}"
+        )
+    
+    if args.timestep_sampling == "logit_normal":
+        # Implement LOGIT_NORMAL distribution as in OneTrainer
+        bias = args.noising_bias
+        scale = args.noising_weight + 1.0
+        
+        # Generate normal distribution with bias and scale
+        normal = torch.normal(bias, scale, size=(bsz,), generator=None, device=device)
+        # Apply sigmoid to get logit normal distribution
+        sigmas = torch.sigmoid(normal)
+        
+        # Apply timestep shift if needed
+        if shift != 1.0:
+            sigmas = apply_timestep_shift(sigmas, shift)
+        
+        # Apply min/max noising strength
+        timesteps = min_timestep + (sigmas * timestep_range)
+    elif args.timestep_sampling == "uniform" or args.timestep_sampling == "sigmoid":
         # Simple random sigma-based noise sampling
         if args.timestep_sampling == "sigmoid":
             # https://github.com/XLabs-AI/x-flux/tree/main
@@ -482,21 +562,38 @@ def get_noisy_model_input_and_timesteps(
         else:
             sigmas = torch.rand((bsz,), device=device)
 
-        timesteps = sigmas * num_timesteps
+        # Apply timestep shift if needed
+        if shift != 1.0:
+            sigmas = apply_timestep_shift(sigmas, shift)
+            
+        # Apply min/max noising strength
+        timesteps = min_timestep + (sigmas * timestep_range)
     elif args.timestep_sampling == "shift":
-        shift = args.discrete_flow_shift
+        shift_value = args.discrete_flow_shift
         sigmas = torch.randn(bsz, device=device)
         sigmas = sigmas * args.sigmoid_scale  # larger scale for more uniform sampling
         sigmas = sigmas.sigmoid()
-        sigmas = (sigmas * shift) / (1 + (shift - 1) * sigmas)
-        timesteps = sigmas * num_timesteps
+        sigmas = (sigmas * shift_value) / (1 + (shift_value - 1) * sigmas)
+        
+        # Apply additional timestep shift if needed
+        if shift != 1.0:
+            sigmas = apply_timestep_shift(sigmas, shift)
+            
+        # Apply min/max noising strength
+        timesteps = min_timestep + (sigmas * timestep_range)
     elif args.timestep_sampling == "flux_shift":
         sigmas = torch.randn(bsz, device=device)
         sigmas = sigmas * args.sigmoid_scale  # larger scale for more uniform sampling
         sigmas = sigmas.sigmoid()
         mu = get_lin_function(y1=0.5, y2=1.15)((h // 2) * (w // 2))  # we are pre-packed so must adjust for packed size
         sigmas = time_shift(mu, 1.0, sigmas)
-        timesteps = sigmas * num_timesteps
+        
+        # Apply additional timestep shift if needed
+        if shift != 1.0:
+            sigmas = apply_timestep_shift(sigmas, shift)
+            
+        # Apply min/max noising strength
+        timesteps = min_timestep + (sigmas * timestep_range)
     else:
         # Sample a random timestep for each image
         # for weighting schemes where we sample timesteps non-uniformly
@@ -507,7 +604,17 @@ def get_noisy_model_input_and_timesteps(
             logit_std=args.logit_std,
             mode_scale=args.mode_scale,
         )
-        indices = (u * num_timesteps).long()
+        
+        # Apply timestep shift if needed
+        if shift != 1.0:
+            u = apply_timestep_shift(u, shift)
+        
+        # Apply min/max noising strength to the indices
+        adjusted_u = args.min_noising_strength + (u * (args.max_noising_strength - args.min_noising_strength))
+        indices = (adjusted_u * num_timesteps).long()
+        
+        # Ensure indices are within valid range for the scheduler
+        indices = torch.clamp(indices, 0, len(noise_scheduler.timesteps) - 1)
         timesteps = noise_scheduler.timesteps[indices].to(device=device)
         sigmas = get_sigmas(noise_scheduler, timesteps, device, n_dim=latents.ndim, dtype=dtype)
 
@@ -654,10 +761,51 @@ def add_flux_train_arguments(parser: argparse.ArgumentParser):
 
     parser.add_argument(
         "--timestep_sampling",
-        choices=["sigma", "uniform", "sigmoid", "shift", "flux_shift"],
+        choices=["sigma", "uniform", "sigmoid", "shift", "flux_shift", "logit_normal"],
         default="sigma",
-        help="Method to sample timesteps: sigma-based, uniform random, sigmoid of random normal, shift of sigmoid and FLUX.1 shifting."
-        " / タイムステップをサンプリングする方法：sigma、random uniform、random normalのsigmoid、sigmoidのシフト、FLUX.1のシフト。",
+        help="Method to sample timesteps: sigma-based, uniform random, sigmoid of random normal, shift of sigmoid, FLUX.1 shifting, or logit normal distribution."
+        " / タイムステップをサンプリングする方法：sigma、random uniform、random normalのsigmoid、sigmoidのシフト、FLUX.1のシフト、またはlogit normal分布。",
+    )
+    parser.add_argument(
+        "--min_noising_strength",
+        type=float,
+        default=0.0,
+        help="Minimum noising strength as a percentage (0.0 to 1.0) of total timesteps. Controls the minimum timestep used for training."
+        " / 全タイムステップに対する最小ノイズ強度（0.0～1.0）。トレーニングに使用される最小タイムステップを制御します。",
+    )
+    parser.add_argument(
+        "--max_noising_strength",
+        type=float,
+        default=1.0,
+        help="Maximum noising strength as a percentage (0.0 to 1.0) of total timesteps. Controls the maximum timestep used for training."
+        " / 全タイムステップに対する最大ノイズ強度（0.0～1.0）。トレーニングに使用される最大タイムステップを制御します。",
+    )
+    parser.add_argument(
+        "--noising_weight",
+        type=float,
+        default=0.65,
+        help="Weight parameter for logit normal distribution (similar to scale). Higher values make distribution more uniform."
+        " / logit normal分布の重みパラメータ（スケールに類似）。値が大きいほど分布が均一になります。",
+    )
+    parser.add_argument(
+        "--noising_bias",
+        type=float,
+        default=0.5,
+        help="Bias parameter for logit normal distribution. Controls the center of the distribution."
+        " / logit normal分布のバイアスパラメータ。分布の中心を制御します。",
+    )
+    parser.add_argument(
+        "--timestep_shift",
+        type=float,
+        default=1.0,
+        help="Shift parameter for timestep distribution. Values > 1 emphasize earlier timesteps, values < 1 emphasize later timesteps."
+        " / タイムステップ分布のシフトパラメータ。1より大きい値は早期タイムステップを強調し、1より小さい値は後期タイムステップを強調します。",
+    )
+    parser.add_argument(
+        "--dynamic_timestep_shifting",
+        action="store_true",
+        help="Enable dynamic timestep shifting based on image size. Overrides timestep_shift parameter."
+        " / 画像サイズに基づく動的タイムステップシフトを有効にします。timestep_shiftパラメータを上書きします。",
     )
     parser.add_argument(
         "--sigmoid_scale",
