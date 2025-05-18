@@ -960,7 +960,7 @@ class LoRANetwork(torch.nn.Module):
         for lora in self.text_encoder_loras + self.unet_loras:
             if hasattr(lora, "grad_norms") and lora.grad_norms is not None:
                 grad_norms.append(lora.grad_norms.mean(dim=0))
-        return torch.stack(grad_norms) if len(grad_norms) > 0 else else None
+        return torch.stack(grad_norms) if len(grad_norms) > 0 else None
 
     def weight_norms(self) -> Tensor | None:
         weight_norms = []
